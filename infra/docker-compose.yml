@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: fastpass-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fastpass
+      POSTGRES_PASSWORD: fastpass
+      POSTGRES_DB: fastpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - fastpass_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastpass -d fastpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  fastpass_pgdata:
