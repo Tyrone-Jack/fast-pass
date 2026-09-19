@@ -1,0 +1,20 @@
+{
+  "name": "@fast-pass/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "echo 'api dev not wired yet'",
+    "build": "echo 'api build not wired yet'",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no lint yet'",
+    "test": "echo 'no tests yet'"
+  },
+  "dependencies": {
+    "@fast-pass/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

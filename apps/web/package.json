@@ -1,0 +1,16 @@
+{
+  "name": "@fast-pass/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'web dev not wired yet'",
+    "build": "echo 'web build not wired yet'",
+    "typecheck": "echo 'web typecheck not wired yet'",
+    "lint": "echo 'no lint yet'",
+    "test": "echo 'no tests yet'"
+  },
+  "dependencies": {
+    "@fast-pass/shared": "workspace:*"
+  }
+}
