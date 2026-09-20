@@ -1,2 +1,1 @@
-export * from "./schemas/common.js";
-export * from "./schemas/organization.js";
+export * from "./schemas/index.js";
