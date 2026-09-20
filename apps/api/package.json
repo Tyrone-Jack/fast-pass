@@ -5,11 +5,15 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "echo 'api dev not wired yet'",
-    "build": "echo 'api build not wired yet'",
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "lint": "echo 'no lint yet'",
-    "test": "echo 'no tests yet'"
+    "lint": "echo 'lint not wired yet'",
+    "test": "vitest run",
+    "db:migrate": "node-pg-migrate up",
+    "db:rollback": "node-pg-migrate down",
+    "db:create": "node-pg-migrate create"
   },
   "dependencies": {
     "@fast-pass/shared": "workspace:*",
