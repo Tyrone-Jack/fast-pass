@@ -11,9 +11,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "echo 'lint not wired yet'",
     "test": "vitest run",
-    "db:migrate": "node-pg-migrate up",
-    "db:rollback": "node-pg-migrate down",
-    "db:create": "node-pg-migrate create"
+    "db:migrate": "node --env-file=.env ./node_modules/node-pg-migrate/bin/node-pg-migrate.js up",
+    "db:rollback": "node --env-file=.env ./node_modules/node-pg-migrate/bin/node-pg-migrate.js down",
+    "db:create": "node --env-file=.env ./node_modules/node-pg-migrate/bin/node-pg-migrate.js create"
   },
   "dependencies": {
     "@fast-pass/shared": "workspace:*",
