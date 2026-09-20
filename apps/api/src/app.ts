@@ -4,6 +4,8 @@ import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { env } from "./config/env.js";
 import { organizationRouter } from "./modules/organizations/organization.routes.js";
+import { driverRouter } from "./modules/drivers/driver.routes.js";
+import { gateRouter } from "./modules/gates/gate.routes.js";
 import {
   errorHandler,
   notFoundHandler,
@@ -13,22 +15,12 @@ export function createApp() {
   const app = express();
 
   app.use(helmet());
-
-  app.use(
-    cors({
-      origin: env.CORS_ORIGIN,
-      credentials: true,
-    }),
-  );
-
+  app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
   app.use(express.json({ limit: "1mb" }));
-
   app.use(
     pinoHttp({
       level: env.LOG_LEVEL,
-      autoLogging: {
-        ignore: (req) => req.url === "/health",
-      },
+      autoLogging: { ignore: (req) => req.url === "/health" },
     }),
   );
 
@@ -38,6 +30,10 @@ export function createApp() {
 
   // --- API v1 --------------------------------------------------------------
   app.use("/api/v1/organizations", organizationRouter);
+  app.use("/api/v1/gates", gateRouter);
+  // Drivers uses both /drivers and /organizations/:orgId/drivers,
+  // so mount at /api/v1 and let the router decide.
+  app.use("/api/v1", driverRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
