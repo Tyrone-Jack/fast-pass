@@ -3,7 +3,7 @@ import { HttpError } from "../../middleware/error-handler.js";
 import { reportRepository } from "./report.repository.js";
 
 export const reportService = {
-  async gatePdf(gateId: string): Promise<NodeJS.ReadableStream> {
+  async gatePdf(gateId: string): Promise<PDFKit.PDFDocument> {
     const gate = await reportRepository.gateById(gateId);
     if (!gate) {
       throw new HttpError(404, "Gate not found", "GATE_NOT_FOUND");
@@ -25,7 +25,7 @@ export const reportService = {
       const time = log.verified_at.toISOString();
       doc
         .fillColor(log.result === "ALLOW" ? "green" : "red")
-        .text(`${log.result}  ${time}  ${log.driver_name}`, { continued: false });
+        .text(`${log.result}  ${time}  ${log.driver_name}`);
       doc.fillColor("black");
       doc.text(
         `  ${log.organization_name} · ${log.driver_phone} · Purpose: ${log.purpose}` +
@@ -35,7 +35,7 @@ export const reportService = {
     }
 
     doc.end();
-    return doc as unknown as NodeJS.ReadableStream;
+    return doc;
   },
 
   async orgCsv(organizationId: string): Promise<string> {
