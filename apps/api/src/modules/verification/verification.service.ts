@@ -1,18 +1,10 @@
-import { z } from "zod";
-import { accessRequestRepository } from "../access-requests/access-request.repository.js";
-import { driverRepository } from "../drivers/driver.repository.js";
+import { ScanGateInputSchema } from "@fast-pass/shared";
+import { HttpError } from "../../middleware/error-handler.js";
+import type { CurrentDriver } from "../auth/auth.service.js";
 import { gateRepository } from "../gates/gate.repository.js";
 import { organizationRepository } from "../organizations/organization.repository.js";
+import { driverRepository } from "../drivers/driver.repository.js";
 import { verificationRepository } from "./verification.repository.js";
-
-/**
- * Input for POST /verification/scan.
- * Section 10 of the spec: { requestId, gateId }.
- */
-const ScanInputSchema = z.object({
-  requestId: z.string().min(1),
-  gateId: z.string().min(1),
-});
 
 export type VerificationResult =
   | {
@@ -23,157 +15,133 @@ export type VerificationResult =
       purpose: string;
       verifiedAt: string;
     }
-  | {
-      result: "DENY";
-      reason: string;
-      verifiedAt: string;
-    };
+  | { result: "DENY"; reason: string; verifiedAt: string };
 
 export const verificationService = {
-  /**
-   * Section 5 verification flow.
-   *
-   * Scanning the QR does NOT grant access. It triggers this function.
-   * The QR merely carries the requestId — nothing else.
-   *
-   * Every attempt (ALLOW or DENY) writes exactly one row to access_logs.
-   */
-  async scan(body: unknown): Promise<VerificationResult> {
-    const parsed = ScanInputSchema.parse(body);
-    const { requestId, gateId } = parsed;
+  async scanGate(
+    driver: CurrentDriver,
+    body: unknown,
+  ): Promise<VerificationResult> {
+    const parsed = ScanGateInputSchema.parse(body);
     const now = new Date();
     const verifiedAt = now.toISOString();
 
-    // --- 1. Fetch the request ---
-    const request = await accessRequestRepository.findById(requestId);
-    if (!request) {
-      await this.logDeny(requestId, gateId, "REQUEST_NOT_FOUND");
-      return { result: "DENY", reason: "REQUEST_NOT_FOUND", verifiedAt };
-    }
-
-    // --- 2. Fetch the gate ---
-    const gate = await gateRepository.findById(gateId);
+    // 1. Find gate by token
+    const gate = await gateRepository.findByToken(parsed.gateToken);
     if (!gate) {
-      // We have a request but no gate. Log against the request's driver
-      // since we know who's involved.
-      await verificationRepository.writeLog({
-        requestId,
-        driverId: request.driverId,
-        gateId,
-        result: "DENY",
-        reason: "GATE_NOT_FOUND",
-      });
+      // Cannot log without a valid gate (FK requires gate_id).
+      // We still return DENY; audit is skipped here intentionally.
       return { result: "DENY", reason: "GATE_NOT_FOUND", verifiedAt };
     }
 
-    // --- 3. Request state checks ---
-    if (request.status === "USED") {
-      return this.deny(request, gateId, "REQUEST_ALREADY_USED", verifiedAt);
-    }
-    if (request.status !== "PENDING") {
-      // EXPIRED or CANCELLED stored state
-      return this.deny(request, gateId, "REQUEST_EXPIRED", verifiedAt);
-    }
-    if (new Date(request.expiresAt) < now) {
-      return this.deny(request, gateId, "REQUEST_EXPIRED", verifiedAt);
+    // 2. Load driver + org (server-side truth, not client)
+    const fullDriver = await driverRepository.findById(driver.id);
+    if (!fullDriver) {
+      return this.deny(null, gate.id, "DRIVER_NOT_FOUND", "Delivery", verifiedAt);
     }
 
-    // --- 4. Driver checks ---
-    const driver = await driverRepository.findById(request.driverId);
-    if (!driver) {
-      return this.deny(request, gateId, "DRIVER_NOT_FOUND", verifiedAt);
-    }
-    if (driver.status !== "ACTIVE") {
-      return this.deny(request, gateId, "DRIVER_INACTIVE", verifiedAt);
-    }
-
-    // --- 5. Organization checks ---
-    const organization = await organizationRepository.findById(
-      request.organizationId,
-    );
-    if (!organization) {
-      return this.deny(request, gateId, "ORGANIZATION_INACTIVE", verifiedAt);
-    }
-    if (organization.status !== "ACTIVE") {
-      return this.deny(request, gateId, "ORGANIZATION_INACTIVE", verifiedAt);
+    const org = await organizationRepository.findById(fullDriver.organizationId);
+    if (!org) {
+      return this.deny(
+        fullDriver,
+        gate.id,
+        "ORGANIZATION_INACTIVE",
+        "Delivery",
+        verifiedAt,
+      );
     }
 
-    // --- 6. Gate checks ---
+    // 3. Driver active
+    if (fullDriver.status !== "ACTIVE") {
+      return this.deny(fullDriver, gate.id, "DRIVER_INACTIVE", org.purpose, verifiedAt);
+    }
+
+    // 4. Org active
+    if (org.status !== "ACTIVE") {
+      return this.deny(
+        fullDriver,
+        gate.id,
+        "ORGANIZATION_INACTIVE",
+        org.purpose,
+        verifiedAt,
+      );
+    }
+
+    // 5. Gate active
     if (gate.status !== "ACTIVE") {
-      return this.deny(request, gateId, "GATE_INACTIVE", verifiedAt);
+      return this.deny(fullDriver, gate.id, "GATE_INACTIVE", org.purpose, verifiedAt);
     }
 
-    // --- 7. Gate authorization ---
-    // The request was created for a specific gate. Scanning at a
-    // different gate is denied.
-    if (request.gateId !== gateId) {
-      return this.deny(request, gateId, "GATE_NOT_AUTHORIZED", verifiedAt);
+    // 6. Gate authorization: allow if no explicit entries, else match.
+    const authorized = await this.isAuthorized(gate.id, org.id);
+    if (!authorized) {
+      return this.deny(
+        fullDriver,
+        gate.id,
+        "GATE_NOT_AUTHORIZED",
+        org.purpose,
+        verifiedAt,
+      );
     }
 
-    // --- ALL CHECKS PASSED ---
+    // ALLOW
     await verificationRepository.writeLog({
-      requestId,
-      driverId: driver.id,
-      gateId,
+      reference: null,
+      driverId: fullDriver.id,
+      organizationId: org.id,
+      gateId: gate.id,
+      purpose: org.purpose,
       result: "ALLOW",
       reason: null,
     });
 
-    // Mark request as consumed — single-use per Section 12.
-    await accessRequestRepository.markUsed(requestId);
-
     return {
       result: "ALLOW",
-      driver: { id: driver.id, name: driver.name },
-      organization: { id: organization.id, name: organization.name },
+      driver: { id: fullDriver.id, name: fullDriver.name },
+      organization: { id: org.id, name: org.name },
       gate: { id: gate.id, name: gate.name },
-      purpose: request.purpose,
+      purpose: org.purpose,
       verifiedAt,
     };
   },
 
-  /**
-   * Helper: write a DENY log + return the response shape.
-   * Keeps the main flow readable.
-   */
-  async deny(
-    request: { id: string; driverId: string },
-    gateId: string,
-    reason: string,
-    verifiedAt: string,
-  ): Promise<VerificationResult> {
-    await verificationRepository.writeLog({
-      requestId: request.id,
-      driverId: request.driverId,
-      gateId,
-      result: "DENY",
-      reason,
-    });
-    return { result: "DENY", reason, verifiedAt };
+  async isAuthorized(gateId: string, organizationId: string): Promise<boolean> {
+    const { pool } = await import("../../db/pool.js");
+    const { rows } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM gate_authorized_organizations
+       WHERE gate_id = $1`,
+      [gateId],
+    );
+    const count = Number(rows[0]?.count ?? "0");
+    if (count === 0) return true; // open gate
+
+    const { rows: match } = await pool.query(
+      `SELECT 1 FROM gate_authorized_organizations
+       WHERE gate_id = $1 AND organization_id = $2`,
+      [gateId, organizationId],
+    );
+    return match.length > 0;
   },
 
-  /**
-   * Helper for the earliest DENY case where we have no request record.
-   * Uses a placeholder driver_id because the audit table requires one.
-   *
-   * NOTE: In the schema, access_logs.driver_id has a FK to drivers.
-   * A request that doesn't exist means we have no driver.
-   * For the MVP we insert a fixed sentinel UUID that we'll seed as a
-   * "system" driver. See migration 2 in the next phase.
-   */
-  async logDeny(
-    requestId: string,
+  async deny(
+    driver: { id: string; organizationId: string } | null,
     gateId: string,
     reason: string,
-  ): Promise<void> {
-    // Placeholder — handled in the next migration.
-    // We'll seed a SYSTEM driver row and reference its UUID.
-    await verificationRepository.writeLog({
-      requestId,
-      driverId: "00000000-0000-0000-0000-000000000000",
-      gateId,
-      result: "DENY",
-      reason,
-    });
+    purpose: string,
+    verifiedAt: string,
+  ): Promise<VerificationResult> {
+    if (driver) {
+      await verificationRepository.writeLog({
+        reference: null,
+        driverId: driver.id,
+        organizationId: driver.organizationId,
+        gateId,
+        purpose,
+        result: "DENY",
+        reason,
+      });
+    }
+    return { result: "DENY", reason, verifiedAt };
   },
 };

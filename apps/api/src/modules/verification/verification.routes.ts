@@ -1,16 +1,17 @@
 import { Router } from "express";
 import { verificationService } from "./verification.service.js";
+import { requireAuth } from "../../middleware/require-auth.js";
+import { HttpError } from "../../middleware/error-handler.js";
 
 export const verificationRouter = Router();
 
 /**
- * POST /api/v1/verification/scan
- * UC-06: guard scans a QR. Body: { requestId, gateId }.
- * Returns ALLOW or DENY per Section 4 verification rules.
+ * POST /api/v1/verification/scan-gate
+ * Requires driver session.
+ * Body: { gateToken }
  */
-verificationRouter.post("/scan", async (req, res) => {
-  const result = await verificationService.scan(req.body);
-  // 200 for both ALLOW and DENY — the request itself succeeded.
-  // The "result" field conveys the business outcome.
+verificationRouter.post("/scan-gate", requireAuth, async (req, res) => {
+  if (!req.driver) throw new HttpError(401, "Not authenticated", "UNAUTHENTICATED");
+  const result = await verificationService.scanGate(req.driver, req.body);
   res.json(result);
 });

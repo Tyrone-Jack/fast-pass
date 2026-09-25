@@ -8,21 +8,11 @@ import {
   type OrganizationRecord,
 } from "./organization.repository.js";
 
-/**
- * Organization service.
- *
- * Trust boundary (spec Section 12): the client may only supply `name`.
- * Everything else (id, status, createdAt) is server-generated.
- * This is enforced here — not in the route, not in the repository.
- */
 export const organizationService = {
   async create(input: unknown): Promise<OrganizationRecord> {
-    // Validate + strip unknown fields via Zod.
-    // If the client sends { name, id, status }, only `name` survives.
     const parsed: CreateOrganizationInput =
       CreateOrganizationInputSchema.parse(input);
-
-    return organizationRepository.create(parsed.name);
+    return organizationRepository.create(parsed.name, parsed.purpose);
   },
 
   async getById(id: string): Promise<OrganizationRecord> {

@@ -1,3 +1,4 @@
+import bcrypt from "bcrypt";
 import { CreateDriverInputSchema } from "@fast-pass/shared";
 import { HttpError } from "../../middleware/error-handler.js";
 import { organizationRepository } from "../organizations/organization.repository.js";
@@ -7,30 +8,35 @@ import {
 } from "./driver.repository.js";
 
 export const driverService = {
-  /**
-   * Create a driver under an organization.
-   * Trust boundary: organizationId comes from the caller (URL/query),
-   * NOT from the request body. `name` and `phone` are the only body fields.
-   */
-  async create(
-    organizationId: string,
-    body: unknown,
-  ): Promise<DriverRecord> {
-    // 1. Verify the organization actually exists — this is the
-    //    server-side check Section 12 requires.
+  async create(organizationId: string, body: unknown): Promise<DriverRecord> {
     const org = await organizationRepository.findById(organizationId);
     if (!org) {
-      throw new HttpError(
-        404,
-        "Organization not found",
-        "ORGANIZATION_NOT_FOUND",
-      );
+      throw new HttpError(404, "Organization not found", "ORGANIZATION_NOT_FOUND");
     }
 
-    // 2. Validate + strip body fields.
     const parsed = CreateDriverInputSchema.parse(body);
+    const passwordHash = await bcrypt.hash(parsed.password, 10);
 
-    return driverRepository.create(organizationId, parsed.name, parsed.phone);
+    try {
+      return await driverRepository.create(
+        organizationId,
+        parsed.name,
+        parsed.phone,
+        parsed.email.toLowerCase(),
+        passwordHash,
+      );
+    } catch (err: unknown) {
+      // Unique constraint on email
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code: string }).code === "23505"
+      ) {
+        throw new HttpError(409, "Email already registered", "EMAIL_IN_USE");
+      }
+      throw err;
+    }
   },
 
   async getById(id: string): Promise<DriverRecord> {
