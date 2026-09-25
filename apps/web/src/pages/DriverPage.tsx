@@ -1,176 +1,230 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { QRCodeSVG } from "qrcode.react";
-import {
-  api,
-  ApiError,
-  type AccessRequest,
-  type Driver,
-  type Gate,
-} from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { Html5Qrcode } from "html5-qrcode";
+import { api, ApiError, type VerificationResult } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.details) {
-    return Object.entries(err.details)
-      .map(([f, m]) => `${f}: ${m.join(", ")}`)
-      .join(" | ");
-  }
-  if (err instanceof Error) return err.message;
-  return "Unknown error";
-}
+const SCANNER_ID = "fastpass-scanner";
 
 export default function DriverPage() {
-  const [driverId, setDriverId] = useState("");
-  const [gateId, setGateId] = useState("");
-  const [purpose, setPurpose] = useState("Package delivery");
-  const [request, setRequest] = useState<AccessRequest | null>(null);
+  const { driver, logout } = useAuth();
+  const [scanning, setScanning] = useState(false);
+  const [token, setToken] = useState("");
+  const [result, setResult] = useState<VerificationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const mountedRef = useRef(true);
 
-  const gatesQuery = useQuery({
-    queryKey: ["gates"],
-    queryFn: () => api.gates.list(),
-  });
+  async function safeStop() {
+    const scanner = scannerRef.current;
+    scannerRef.current = null;
+    if (!scanner) return;
+    try {
+      if (scanner.getState() === 2) {
+        await scanner.stop();
+      }
+    } catch {
+      // already stopped or transitioning — ignore
+    }
+    try {
+      scanner.clear();
+    } catch {
+      // container not ready — ignore
+    }
+  }
 
-  // We need all drivers across all orgs. Simplest way for MVP:
-  // fetch orgs, then fetch drivers for the first real org.
-  // (A proper "list all drivers" endpoint can come later.)
-  const orgsQuery = useQuery({
-    queryKey: ["organizations"],
-    queryFn: () => api.organizations.list(),
-  });
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      void safeStop();
+    };
+  }, []);
 
-  const realOrgId =
-    orgsQuery.data?.data.find((o) => o.name !== "__SYSTEM__")?.id ?? "";
+  async function verify(gateToken: string) {
+    if (!gateToken.trim()) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.verification.scanGate(gateToken.trim());
+      if (mountedRef.current) setResult(res);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      if (err instanceof ApiError) {
+        setError(err.code);
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Verification failed");
+      }
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  }
 
-  const driversQuery = useQuery({
-    queryKey: ["drivers", realOrgId],
-    queryFn: () => api.drivers.listByOrg(realOrgId),
-    enabled: !!realOrgId,
-  });
+  async function startScan() {
+    setError(null);
+    setResult(null);
+    setScanning(true);
+    await new Promise((r) => setTimeout(r, 100));
+    if (!mountedRef.current) return;
+    try {
+      const scanner = new Html5Qrcode(SCANNER_ID);
+      scannerRef.current = scanner;
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        async (decodedText) => {
+          let extracted = decodedText.trim();
+          const m = extracted.match(/^fastpass:\/\/gate\/(.+)$/);
+          if (m && m[1]) extracted = m[1];
+          await safeStop();
+          if (mountedRef.current) setScanning(false);
+          await verify(extracted);
+        },
+        () => {
+          // silent decode failure
+        },
+      );
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setScanning(false);
+      setError(
+        "Camera unavailable: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
 
-  const create = useMutation({
-    mutationFn: () =>
-      api.accessRequests.create({
-        driverId,
-        gateId,
-        purpose: purpose.trim(),
-      }),
-    onSuccess: (data) => {
-      setRequest(data);
-      setError(null);
-    },
-    onError: (err) => setError(errorMessage(err)),
-  });
+  async function stopScan() {
+    await safeStop();
+    if (mountedRef.current) setScanning(false);
+  }
 
-  const expiresIn = request
-    ? Math.max(
-        0,
-        Math.floor(
-          (new Date(request.expiresAt).getTime() - Date.now()) / 1000,
-        ),
-      )
-    : 0;
+  function reset() {
+    setResult(null);
+    setError(null);
+    setToken("");
+  }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">Driver</h1>
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Hi, {driver?.name}
+          </h1>
+          <p className="text-sm text-slate-500">{driver?.email}</p>
+        </div>
+        <button
+          onClick={logout}
+          className="text-sm text-slate-600 hover:text-slate-900"
+        >
+          Sign out
+        </button>
+      </div>
 
-      {!request && (
-        <section className="bg-white rounded-lg border border-slate-200 p-6">
-          <h2 className="text-lg font-semibold mb-4">
-            Create access request
+      {!result && !error && (
+        <section className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Scan the QR code at the gate
           </h2>
 
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Driver
-              </label>
-              <select
-                value={driverId}
-                onChange={(e) => setDriverId(e.target.value)}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
-              >
-                <option value="">-- Select driver --</option>
-                {driversQuery.data?.data.map((d: Driver) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} ({d.phone})
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div
+            id={SCANNER_ID}
+            className={`w-full max-w-sm mx-auto ${scanning ? "" : "hidden"}`}
+          />
 
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Gate
-              </label>
-              <select
-                value={gateId}
-                onChange={(e) => setGateId(e.target.value)}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
-              >
-                <option value="">-- Select gate --</option>
-                {gatesQuery.data?.data.map((g: Gate) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name} — {g.location}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Purpose
-              </label>
-              <input
-                value={purpose}
-                onChange={(e) => setPurpose(e.target.value)}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
-              />
-            </div>
-
+          {!scanning && (
             <button
-              onClick={() => create.mutate()}
-              disabled={create.isPending || !driverId || !gateId || !purpose.trim()}
-              className="w-full bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              onClick={startScan}
+              disabled={busy}
+              className="w-full bg-blue-600 text-white px-4 py-3 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50"
             >
-              {create.isPending ? "Creating..." : "Generate QR"}
+              Open camera
             </button>
+          )}
 
-            {error && (
-              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-2">
-                {error}
-              </div>
-            )}
+          {scanning && (
+            <button
+              onClick={stopScan}
+              className="w-full border border-slate-300 px-4 py-2 rounded-md text-sm"
+            >
+              Cancel
+            </button>
+          )}
+
+          <div className="border-t border-slate-200 pt-4">
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              Or paste the gate token manually
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="gate token"
+                className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm font-mono"
+              />
+              <button
+                onClick={() => verify(token)}
+                disabled={busy || !token.trim()}
+                className="bg-slate-800 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
+              >
+                Verify
+              </button>
+            </div>
           </div>
         </section>
       )}
 
-      {request && (
-        <section className="bg-white rounded-lg border border-slate-200 p-6 text-center">
-          <h2 className="text-lg font-semibold mb-2">Present this QR</h2>
-          <p className="text-sm text-slate-600 mb-1">
-            Show to the gate operator.
-          </p>
-          <p className="text-xs text-slate-500 mb-4">
-            Expires in {expiresIn}s — status {request.status}
-          </p>
-
-          <div className="inline-block p-4 bg-white border border-slate-200 rounded-lg">
-            <QRCodeSVG value={request.id} size={220} />
+      {result?.result === "ALLOW" && (
+        <section className="bg-green-50 border-2 border-green-500 rounded-lg p-6 text-center">
+          <div className="text-5xl font-black text-green-700 mb-4">ALLOW</div>
+          <div className="text-xl font-semibold text-slate-900">
+            {result.driver.name}
           </div>
-
-          <div className="mt-4 text-xs text-slate-500 font-mono break-all">
-            {request.id}
+          <div className="text-slate-700">{result.organization.name}</div>
+          <div className="text-slate-600 text-sm mt-2">
+            Purpose: {result.purpose}
           </div>
-
+          <div className="text-slate-500 text-xs mt-1">
+            Gate: {result.gate.name}
+          </div>
           <button
-            onClick={() => setRequest(null)}
-            className="mt-4 text-sm text-blue-600 hover:underline"
+            onClick={reset}
+            className="mt-6 bg-green-700 text-white px-6 py-2 rounded-md font-medium hover:bg-green-800"
           >
-            Create another request
+            Done
           </button>
         </section>
+      )}
+
+      {result?.result === "DENY" && (
+        <section className="bg-red-50 border-2 border-red-500 rounded-lg p-6 text-center">
+          <div className="text-5xl font-black text-red-700 mb-4">DENY</div>
+          <div className="text-lg font-semibold text-slate-900">
+            {result.reason.replace(/_/g, " ").toLowerCase()}
+          </div>
+          <div className="text-slate-500 text-xs mt-2 font-mono">
+            {result.reason}
+          </div>
+          <button
+            onClick={reset}
+            className="mt-6 bg-red-700 text-white px-6 py-2 rounded-md font-medium hover:bg-red-800"
+          >
+            Try again
+          </button>
+        </section>
+      )}
+
+      {error && !result && (
+        <button
+          onClick={reset}
+          className="w-full bg-slate-200 text-slate-800 px-4 py-2 rounded-md font-medium"
+        >
+          Try again
+        </button>
       )}
     </div>
   );

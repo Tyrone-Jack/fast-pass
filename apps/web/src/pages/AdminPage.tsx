@@ -8,11 +8,10 @@ import {
   type Gate,
 } from "../lib/api";
 
-// --- helpers ---------------------------------------------------------------
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError && err.details) {
     return Object.entries(err.details)
-      .map(([field, msgs]) => `${field}: ${msgs.join(", ")}`)
+      .map(([f, m]) => `${f}: ${m.join(", ")}`)
       .join(" | ");
   }
   if (err instanceof Error) return err.message;
@@ -33,10 +32,10 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// --- Organizations ---------------------------------------------------------
 function OrganizationsSection() {
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [purpose, setPurpose] = useState("Delivery");
   const [error, setError] = useState<string | null>(null);
 
   const orgsQuery = useQuery({
@@ -45,28 +44,26 @@ function OrganizationsSection() {
   });
 
   const create = useMutation({
-    mutationFn: (n: string) => api.organizations.create(n),
+    mutationFn: () => api.organizations.create(name.trim(), purpose.trim()),
     onSuccess: () => {
       setName("");
+      setPurpose("Delivery");
       setError(null);
       qc.invalidateQueries({ queryKey: ["organizations"] });
     },
     onError: (err) => setError(errorMessage(err)),
   });
 
-  const realOrgs =
-    orgsQuery.data?.data.filter((o) => o.name !== "__SYSTEM__") ?? [];
+  const realOrgs = orgsQuery.data?.data.filter((o) => o.name !== "__SYSTEM__") ?? [];
 
   return (
     <section className="bg-white rounded-lg border border-slate-200 p-6">
-      <h2 className="text-lg font-semibold text-slate-900 mb-4">
-        Organizations
-      </h2>
+      <h2 className="text-lg font-semibold text-slate-900 mb-4">Organizations</h2>
 
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (name.trim()) create.mutate(name.trim());
+          if (name.trim()) create.mutate();
         }}
         className="flex gap-2 mb-4"
       >
@@ -74,14 +71,20 @@ function OrganizationsSection() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Organization name"
-          className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm"
+        />
+        <input
+          value={purpose}
+          onChange={(e) => setPurpose(e.target.value)}
+          placeholder="Purpose (e.g. Package delivery)"
+          className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm"
         />
         <button
           type="submit"
-          disabled={create.isPending || !name.trim()}
+          disabled={create.isPending || !name.trim() || !purpose.trim()}
           className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
         >
-          {create.isPending ? "Creating..." : "Create"}
+          Create
         </button>
       </form>
 
@@ -92,18 +95,20 @@ function OrganizationsSection() {
       )}
 
       <ul className="divide-y divide-slate-100">
-        {realOrgs.map((org) => (
+        {realOrgs.map((org: Organization) => (
           <li key={org.id} className="py-2 flex justify-between items-center">
             <div>
               <div className="font-medium text-slate-900">{org.name}</div>
-              <div className="text-xs text-slate-500 font-mono">{org.id}</div>
+              <div className="text-xs text-slate-500">
+                Purpose: {org.purpose}
+              </div>
             </div>
             <StatusBadge status={org.status} />
           </li>
         ))}
         {realOrgs.length === 0 && !orgsQuery.isLoading && (
           <li className="text-sm text-slate-500 py-2">
-            No organizations yet. Create one above.
+            No organizations yet.
           </li>
         )}
       </ul>
@@ -111,19 +116,19 @@ function OrganizationsSection() {
   );
 }
 
-// --- Drivers ---------------------------------------------------------------
 function DriversSection() {
   const qc = useQueryClient();
   const orgsQuery = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api.organizations.list(),
   });
-  const realOrgs =
-    orgsQuery.data?.data.filter((o) => o.name !== "__SYSTEM__") ?? [];
+  const realOrgs = orgsQuery.data?.data.filter((o) => o.name !== "__SYSTEM__") ?? [];
 
   const [orgId, setOrgId] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const driversQuery = useQuery({
@@ -134,10 +139,17 @@ function DriversSection() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.drivers.create(orgId, { name: name.trim(), phone: phone.trim() }),
+      api.drivers.create(orgId, {
+        name: name.trim(),
+        phone: phone.trim(),
+        email: email.trim().toLowerCase(),
+        password,
+      }),
     onSuccess: () => {
       setName("");
       setPhone("");
+      setEmail("");
+      setPassword("");
       setError(null);
       qc.invalidateQueries({ queryKey: ["drivers", orgId] });
     },
@@ -148,51 +160,62 @@ function DriversSection() {
     <section className="bg-white rounded-lg border border-slate-200 p-6">
       <h2 className="text-lg font-semibold text-slate-900 mb-4">Drivers</h2>
 
-      <div className="mb-4">
-        <label className="block text-xs font-medium text-slate-600 mb-1">
-          Organization
-        </label>
-        <select
-          value={orgId}
-          onChange={(e) => setOrgId(e.target.value)}
-          className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
-        >
-          <option value="">-- Select an organization --</option>
-          {realOrgs.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <select
+        value={orgId}
+        onChange={(e) => setOrgId(e.target.value)}
+        className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mb-4"
+      >
+        <option value="">-- Select an organization --</option>
+        {realOrgs.map((o: Organization) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
 
       {orgId && (
         <>
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (name.trim() && phone.trim()) create.mutate();
+              if (name.trim() && phone.trim() && email.trim() && password.length >= 8) {
+                create.mutate();
+              }
             }}
-            className="flex gap-2 mb-4"
+            className="grid grid-cols-2 gap-2 mb-4"
           >
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Driver name"
-              className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm"
+              className="border border-slate-300 rounded-md px-3 py-2 text-sm"
             />
             <input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="Phone"
-              className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm"
+              className="border border-slate-300 rounded-md px-3 py-2 text-sm"
+            />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email"
+              className="border border-slate-300 rounded-md px-3 py-2 text-sm"
+            />
+            <input
+              type="text"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Temp password (min 8)"
+              className="border border-slate-300 rounded-md px-3 py-2 text-sm"
             />
             <button
               type="submit"
-              disabled={create.isPending || !name.trim() || !phone.trim()}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              disabled={create.isPending}
+              className="col-span-2 bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
             >
-              {create.isPending ? "Creating..." : "Add"}
+              {create.isPending ? "Creating..." : "Add driver"}
             </button>
           </form>
 
@@ -204,21 +227,16 @@ function DriversSection() {
 
           <ul className="divide-y divide-slate-100">
             {driversQuery.data?.data.map((d: Driver) => (
-              <li
-                key={d.id}
-                className="py-2 flex justify-between items-center"
-              >
+              <li key={d.id} className="py-2 flex justify-between items-center">
                 <div>
                   <div className="font-medium text-slate-900">{d.name}</div>
-                  <div className="text-xs text-slate-500">{d.phone}</div>
+                  <div className="text-xs text-slate-500">{d.email} · {d.phone}</div>
                 </div>
                 <StatusBadge status={d.status} />
               </li>
             ))}
             {driversQuery.data?.data.length === 0 && (
-              <li className="text-sm text-slate-500 py-2">
-                No drivers in this organization yet.
-              </li>
+              <li className="text-sm text-slate-500 py-2">No drivers yet.</li>
             )}
           </ul>
         </>
@@ -227,7 +245,6 @@ function DriversSection() {
   );
 }
 
-// --- Gates -----------------------------------------------------------------
 function GatesSection() {
   const qc = useQueryClient();
   const [name, setName] = useState("");
@@ -240,8 +257,7 @@ function GatesSection() {
   });
 
   const create = useMutation({
-    mutationFn: () =>
-      api.gates.create({ name: name.trim(), location: location.trim() }),
+    mutationFn: () => api.gates.create({ name: name.trim(), location: location.trim() }),
     onSuccess: () => {
       setName("");
       setLocation("");
@@ -276,10 +292,10 @@ function GatesSection() {
         />
         <button
           type="submit"
-          disabled={create.isPending || !name.trim() || !location.trim()}
+          disabled={create.isPending}
           className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
         >
-          {create.isPending ? "Creating..." : "Add"}
+          Create
         </button>
       </form>
 
@@ -291,25 +307,27 @@ function GatesSection() {
 
       <ul className="divide-y divide-slate-100">
         {gatesQuery.data?.data.map((g: Gate) => (
-          <li key={g.id} className="py-2 flex justify-between items-center">
-            <div>
-              <div className="font-medium text-slate-900">{g.name}</div>
-              <div className="text-xs text-slate-500">{g.location}</div>
+          <li key={g.id} className="py-2">
+            <div className="flex justify-between items-center mb-1">
+              <div>
+                <div className="font-medium text-slate-900">{g.name}</div>
+                <div className="text-xs text-slate-500">{g.location}</div>
+              </div>
+              <StatusBadge status={g.status} />
             </div>
-            <StatusBadge status={g.status} />
+            <div className="text-xs font-mono text-slate-400 break-all">
+              token: {g.qrToken}
+            </div>
           </li>
         ))}
         {gatesQuery.data?.data.length === 0 && (
-          <li className="text-sm text-slate-500 py-2">
-            No gates yet. Create one above.
-          </li>
+          <li className="text-sm text-slate-500 py-2">No gates yet.</li>
         )}
       </ul>
     </section>
   );
 }
 
-// --- Root ------------------------------------------------------------------
 export default function AdminPage() {
   return (
     <div className="space-y-6">

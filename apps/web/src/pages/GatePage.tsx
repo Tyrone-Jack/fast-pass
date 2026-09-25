@@ -1,143 +1,88 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  api,
-  ApiError,
-  type Gate,
-  type VerificationResult,
-} from "../lib/api";
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.details) {
-    return Object.entries(err.details)
-      .map(([f, m]) => `${f}: ${m.join(", ")}`)
-      .join(" | ");
-  }
-  if (err instanceof Error) return err.message;
-  return "Unknown error";
-}
+import { useQuery } from "@tanstack/react-query";
+import { api, type Gate } from "../lib/api";
 
 export default function GatePage() {
   const [gateId, setGateId] = useState("");
-  const [requestId, setRequestId] = useState("");
-  const [result, setResult] = useState<VerificationResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const gatesQuery = useQuery({
     queryKey: ["gates"],
     queryFn: () => api.gates.list(),
   });
 
-  const scan = useMutation({
-    mutationFn: () =>
-      api.verification.scan({
-        requestId: requestId.trim(),
-        gateId,
-      }),
-    onSuccess: (data) => {
-      setResult(data);
-      setError(null);
-    },
-    onError: (err) => {
-      setError(errorMessage(err));
-      setResult(null);
-    },
-  });
+  const selected = gatesQuery.data?.data.find((g: Gate) => g.id === gateId);
 
-  function reset() {
-    setResult(null);
-    setRequestId("");
-    setError(null);
+  function downloadPdf() {
+    if (!selected) return;
+    window.open(`/api/v1/reports/gate/${selected.id}.pdf`, "_blank");
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">Gate</h1>
+      <h1 className="text-2xl font-bold text-slate-900">Gate dashboard</h1>
 
       <section className="bg-white rounded-lg border border-slate-200 p-6">
-        <div className="mb-4">
-          <label className="block text-xs font-medium text-slate-600 mb-1">
-            Your gate
-          </label>
-          <select
-            value={gateId}
-            onChange={(e) => setGateId(e.target.value)}
-            className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
-          >
-            <option value="">-- Select gate --</option>
-            {gatesQuery.data?.data.map((g: Gate) => (
-              <option key={g.id} value={g.id}>
-                {g.name} — {g.location}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xs font-medium text-slate-600 mb-1">
-            Scanned request ID
-          </label>
-          <input
-            value={requestId}
-            onChange={(e) => setRequestId(e.target.value)}
-            placeholder="Paste scanned QR value"
-            className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono"
-          />
-        </div>
-
-        <button
-          onClick={() => scan.mutate()}
-          disabled={scan.isPending || !gateId || !requestId.trim()}
-          className="w-full bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+        <label className="block text-xs font-medium text-slate-600 mb-1">
+          Select your gate
+        </label>
+        <select
+          value={gateId}
+          onChange={(e) => setGateId(e.target.value)}
+          className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
         >
-          {scan.isPending ? "Verifying..." : "Verify"}
-        </button>
-
-        {error && (
-          <div className="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-2">
-            {error}
-          </div>
-        )}
+          <option value="">-- Select a gate --</option>
+          {gatesQuery.data?.data.map((g: Gate) => (
+            <option key={g.id} value={g.id}>
+              {g.name} — {g.location}
+            </option>
+          ))}
+        </select>
       </section>
 
-      {result && result.result === "ALLOW" && (
-        <section className="bg-green-50 border-2 border-green-500 rounded-lg p-6 text-center">
-          <div className="text-4xl font-black text-green-700 mb-4">ALLOW</div>
-          <div className="text-lg font-semibold text-slate-900">
-            {result.driver.name}
-          </div>
-          <div className="text-slate-700">{result.organization.name}</div>
-          <div className="text-slate-600 text-sm mt-2">
-            Purpose: {result.purpose}
-          </div>
-          <div className="text-slate-500 text-xs mt-1">
-            Gate: {result.gate.name}
-          </div>
-          <button
-            onClick={reset}
-            className="mt-4 text-sm text-green-800 hover:underline"
-          >
-            Next scan
-          </button>
-        </section>
-      )}
+      {selected && (
+        <>
+          <section className="bg-white rounded-lg border border-slate-200 p-6">
+            <h2 className="text-lg font-semibold text-slate-900 mb-2">
+              {selected.name}
+            </h2>
+            <p className="text-sm text-slate-500 mb-4">
+              {selected.location}
+            </p>
 
-      {result && result.result === "DENY" && (
-        <section className="bg-red-50 border-2 border-red-500 rounded-lg p-6 text-center">
-          <div className="text-4xl font-black text-red-700 mb-4">DENY</div>
-          <div className="text-lg font-semibold text-slate-900">
-            {result.reason.replace(/_/g, " ").toLowerCase()}
-          </div>
-          <div className="text-slate-600 text-xs mt-2 font-mono">
-            {result.reason}
-          </div>
-          <button
-            onClick={reset}
-            className="mt-4 text-sm text-red-800 hover:underline"
-          >
-            Next scan
-          </button>
-        </section>
+            <div className="mb-4">
+              <div className="text-xs text-slate-500 mb-1">Gate token</div>
+              <div className="text-xs font-mono bg-slate-50 border border-slate-200 rounded p-2 break-all">
+                {selected.qrToken}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <div className="text-xs text-slate-500 mb-2">
+                Printable QR (mount at the physical gate)
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded p-4 flex justify-center">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                    `fastpass://gate/${selected.qrToken}`,
+                  )}`}
+                  alt="Gate QR code"
+                  width={200}
+                  height={200}
+                />
+              </div>
+              <p className="text-xs text-slate-400 mt-2 text-center">
+                Print and mount at the gate entrance
+              </p>
+            </div>
+
+            <button
+              onClick={downloadPdf}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700"
+            >
+              Download access log PDF
+            </button>
+          </section>
+        </>
       )}
     </div>
   );

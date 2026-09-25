@@ -1,11 +1,3 @@
-/**
- * FastPass API client.
- * All HTTP calls go through `apiFetch`, which handles:
- *   - JSON encoding/decoding
- *   - Error responses (throws ApiError with parsed body)
- *   - Consistent base URL
- */
-
 const BASE = "/api/v1";
 
 export class ApiError extends Error {
@@ -19,12 +11,10 @@ export class ApiError extends Error {
   }
 }
 
-async function apiFetch<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
@@ -45,10 +35,11 @@ async function apiFetch<T>(
   return body as T;
 }
 
-// --- Types (matching shared schema output) -------------------------------
+// --- Types ---------------------------------------------------------------
 export type Organization = {
   id: string;
   name: string;
+  purpose: string;
   status: string;
   createdAt: string;
 };
@@ -58,6 +49,7 @@ export type Driver = {
   organizationId: string;
   name: string;
   phone: string;
+  email: string;
   status: string;
   createdAt: string;
 };
@@ -66,19 +58,16 @@ export type Gate = {
   id: string;
   name: string;
   location: string;
+  qrToken: string;
   status: string;
   createdAt: string;
 };
 
-export type AccessRequest = {
+export type CurrentDriver = {
   id: string;
-  driverId: string;
+  name: string;
+  email: string;
   organizationId: string;
-  gateId: string;
-  purpose: string;
-  status: string;
-  expiresAt: string;
-  createdAt: string;
 };
 
 export type VerificationResult =
@@ -90,24 +79,28 @@ export type VerificationResult =
       purpose: string;
       verifiedAt: string;
     }
-  | {
-      result: "DENY";
-      reason: string;
-      verifiedAt: string;
-    };
+  | { result: "DENY"; reason: string; verifiedAt: string };
 
-// --- Endpoints -----------------------------------------------------------
+// --- Endpoints ------------------------------------------------------------
 export const api = {
+  auth: {
+    login: (email: string, password: string) =>
+      apiFetch<{ ok: true }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }),
+    logout: () =>
+      apiFetch<{ ok: true }>("/auth/logout", { method: "POST" }),
+    me: () => apiFetch<CurrentDriver>("/auth/me"),
+  },
+
   organizations: {
-    list: () =>
-      apiFetch<{ data: Organization[] }>("/organizations"),
-    create: (name: string) =>
+    list: () => apiFetch<{ data: Organization[] }>("/organizations"),
+    create: (name: string, purpose: string) =>
       apiFetch<Organization>("/organizations", {
         method: "POST",
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, purpose }),
       }),
-    get: (id: string) =>
-      apiFetch<Organization>(`/organizations/${id}`),
   },
 
   drivers: {
@@ -117,15 +110,17 @@ export const api = {
       ),
     create: (
       organizationId: string,
-      input: { name: string; phone: string },
+      input: {
+        name: string;
+        phone: string;
+        email: string;
+        password: string;
+      },
     ) =>
-      apiFetch<Driver>(
-        `/organizations/${organizationId}/drivers`,
-        {
-          method: "POST",
-          body: JSON.stringify(input),
-        },
-      ),
+      apiFetch<Driver>(`/organizations/${organizationId}/drivers`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
   },
 
   gates: {
@@ -135,27 +130,14 @@ export const api = {
         method: "POST",
         body: JSON.stringify(input),
       }),
-  },
-
-  accessRequests: {
-    create: (input: {
-      driverId: string;
-      gateId: string;
-      purpose: string;
-    }) =>
-      apiFetch<AccessRequest>("/access-requests", {
-        method: "POST",
-        body: JSON.stringify(input),
-      }),
-    get: (id: string) =>
-      apiFetch<AccessRequest>(`/access-requests/${id}`),
+    get: (id: string) => apiFetch<Gate>(`/gates/${id}`),
   },
 
   verification: {
-    scan: (input: { requestId: string; gateId: string }) =>
-      apiFetch<VerificationResult>("/verification/scan", {
+    scanGate: (gateToken: string) =>
+      apiFetch<VerificationResult>("/verification/scan-gate", {
         method: "POST",
-        body: JSON.stringify(input),
+        body: JSON.stringify({ gateToken }),
       }),
   },
 };
