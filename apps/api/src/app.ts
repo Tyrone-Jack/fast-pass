@@ -9,6 +9,7 @@ import { driverRouter } from "./modules/drivers/driver.routes.js";
 import { gateRouter } from "./modules/gates/gate.routes.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { verificationRouter } from "./modules/verification/verification.routes.js";
+import { reportRouter } from "./modules/reports/report.routes.js";
 import {
   errorHandler,
   notFoundHandler,
@@ -36,6 +37,7 @@ export function createApp() {
   app.use("/api/v1/organizations", organizationRouter);
   app.use("/api/v1/gates", gateRouter);
   app.use("/api/v1/verification", verificationRouter);
+  app.use("/api/v1/reports", reportRouter);
   app.use("/api/v1", driverRouter);
 
   app.use(notFoundHandler);
